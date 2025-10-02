@@ -1,0 +1,17 @@
+configs:
+  - p/owasp-top-ten
+  - p/python
+
+rules:
+  - id: py-danger-eval-exec
+    patterns:
+      - pattern: eval($X)
+    message: "Avoid eval(); use safer alternatives. (OWASP A03:2021 Injection)"
+    severity: ERROR
+    languages: [python]
+
+  - id: py-insecure-deserialization-pickle
+    pattern: pickle.loads(...)
+    message: "Insecure deserialization with pickle.loads. (OWASP A08:2021)"
+    severity: ERROR
+    languages: [python]

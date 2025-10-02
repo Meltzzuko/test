@@ -1,0 +1,12 @@
+docker pull jenkins/jenkins:lts
+
+docker run -d --name jenkins \
+  -p 8081:8080 -p 50000:50000 \
+  -v jenkins_home:/var/jenkins_home \
+  jenkins/jenkins:lts
+
+docker exec -u root jenkins bash -lc "apt-get update && apt-get install -y curl && curl -fsSL https://get.docker.com | sh && usermod -aG docker jenkins"
+
+docker restart jenkins
+
+docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
