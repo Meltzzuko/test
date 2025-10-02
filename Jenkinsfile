@@ -1,13 +1,17 @@
 pipeline {
   agent {
     docker {
-      image 'docker:25.0.3-cli'
-      args '--entrypoint="" -u 0:0 -v /var/run/docker.sock:/var/run/docker.sock'
+      // มี daemon ในตัว
+      image 'docker:25.0.3-dind'
+      // ต้อง privileged เพื่อรัน dockerd ข้างใน
+      args '--privileged -u 0:0 -v /var/jenkins_home:/var/jenkins_home'
+      // (ไม่ต้องแมป /var/run/docker.sock ของโฮสต์)
     }
   }
 
   options {
     timestamps()
+    // ถ้าติดตั้ง AnsiColor plugin แล้ว ค่อยเปิดบรรทัดนี้
     ansiColor('xterm')
   }
 
@@ -23,7 +27,7 @@ pipeline {
       steps {
         sh '''
           set -e
-          docker run --rm --volumes-from jenkins -w "$PWD" python:3.11-slim bash -lc '
+          docker run --rm -v "$PWD":"$PWD" -w "$PWD" python:3.11-slim bash -lc '
             apt-get update &&
             apt-get install -y --no-install-recommends git ca-certificates &&
             rm -rf /var/lib/apt/lists/* &&
@@ -44,7 +48,7 @@ pipeline {
     stage('Bandit (Python SAST)') {
       steps {
         sh '''
-          docker run --rm --volumes-from jenkins -w "$PWD" python:3.11-slim bash -lc '
+          docker run --rm -v "$PWD":"$PWD" -w "$PWD" python:3.11-slim bash -lc '
             pip install --no-cache-dir -q bandit==1.* &&
             bandit -r . -ll -f json -o security-reports/bandit.json || true
           '
@@ -53,10 +57,10 @@ pipeline {
     }
 
     stage('pip-audit (Dependencies)') {
-      when { expression { return fileExists('requirements.txt') } }
+      when { expression { return fileExists("requirements.txt") } }
       steps {
         sh '''
-          docker run --rm --volumes-from jenkins -w "$PWD" python:3.11-slim bash -lc '
+          docker run --rm -v "$PWD":"$PWD" -w "$PWD" python:3.11-slim bash -lc '
             pip install --no-cache-dir -q pip-audit &&
             pip-audit -r requirements.txt -f json -o security-reports/pip-audit_requirements.json || true
           '
@@ -68,7 +72,7 @@ pipeline {
       steps {
         sh '''
           set +e
-          docker run --rm --volumes-from jenkins -w "$PWD" aquasec/trivy:latest \
+          docker run --rm -v "$PWD":"$PWD" -w "$PWD" aquasec/trivy:latest \
             fs . \
             --scanners vuln,secret,misconfig \
             --severity HIGH,CRITICAL \
@@ -91,14 +95,8 @@ pipeline {
   }
 
   post {
-    always {
-      echo 'Scan completed. Reports archived in security-reports/'
-    }
-    success {
-      echo 'Build succeeded. No blocking security findings.'
-    }
-    failure {
-      echo 'Build failed due to security findings or scanner errors. See artifacts.'
-    }
+    always { echo 'Scan completed. Reports archived in security-reports/' }
+    success { echo 'Build succeeded. No blocking security findings.' }
+    failure { echo 'Build failed due to security findings or scanner errors. See artifacts.' }
   }
 }
