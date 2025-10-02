@@ -6,6 +6,7 @@ app = Flask(__name__)
 @app.get("/hello")
 def hello():
     name = request.args.get("name", "world")
+    # safe hashing example (illustrative)
     _ = hashlib.sha256(name.encode()).hexdigest()
     return {"message": f"hello {name}"}
 
