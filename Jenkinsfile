@@ -1,21 +1,34 @@
 pipeline {
   agent {
     docker {
-      // มี daemon ในตัว
-      image 'docker:25.0.3-dind'
-      // ต้อง privileged เพื่อรัน dockerd ข้างใน
-      args '--privileged -u 0:0 -v /var/jenkins_home:/var/jenkins_home'
-      // (ไม่ต้องแมป /var/run/docker.sock ของโฮสต์)
+      image 'python:3.11-slim'
+      args '-u 0:0'   // สิทธิ์ root ในคอนเทนเนอร์เพื่อ apt-get
     }
   }
 
   options {
     timestamps()
-    // ถ้าติดตั้ง AnsiColor plugin แล้ว ค่อยเปิดบรรทัดนี้
-    ansiColor('xterm')
   }
 
   stages {
+    stage('Setup tools') {
+      steps {
+        sh '''
+          set -e
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl
+          rm -rf /var/lib/apt/lists/*
+
+          pip install --no-cache-dir -q semgrep bandit==1.* pip-audit
+
+          # ติดตั้ง Trivy แบบไบนารี (ไม่ใช้ docker)
+          curl -sL https://github.com/aquasecurity/trivy/releases/latest/download/trivy_Linux-64bit.tar.gz \
+            | tar zx -C /usr/local/bin trivy
+          trivy --version
+        '''
+      }
+    }
+
     stage('Checkout') {
       steps {
         checkout scm
@@ -27,20 +40,14 @@ pipeline {
       steps {
         sh '''
           set -e
-          docker run --rm -v "$PWD":"$PWD" -w "$PWD" python:3.11-slim bash -lc '
-            apt-get update &&
-            apt-get install -y --no-install-recommends git ca-certificates &&
-            rm -rf /var/lib/apt/lists/* &&
-            git config --global --add safe.directory "$PWD" &&
-            pip install --no-cache-dir -q semgrep &&
-            semgrep scan \
-              --include "**/*.py" \
-              --config=p/owasp-top-ten \
-              --config=p/python \
-              --severity ERROR \
-              --sarif --output security-reports/semgrep.sarif \
-              --error
-          '
+          git config --global --add safe.directory "$PWD"
+          semgrep scan \
+            --include "**/*.py" \
+            --config=p/owasp-top-ten \
+            --config=p/python \
+            --severity ERROR \
+            --sarif --output security-reports/semgrep.sarif \
+            --error
         '''
       }
     }
@@ -48,22 +55,16 @@ pipeline {
     stage('Bandit (Python SAST)') {
       steps {
         sh '''
-          docker run --rm -v "$PWD":"$PWD" -w "$PWD" python:3.11-slim bash -lc '
-            pip install --no-cache-dir -q bandit==1.* &&
-            bandit -r . -ll -f json -o security-reports/bandit.json || true
-          '
+          bandit -r . -ll -f json -o security-reports/bandit.json || true
         '''
       }
     }
 
     stage('pip-audit (Dependencies)') {
-      when { expression { return fileExists("requirements.txt") } }
+      when { expression { return fileExists('requirements.txt') } }
       steps {
         sh '''
-          docker run --rm -v "$PWD":"$PWD" -w "$PWD" python:3.11-slim bash -lc '
-            pip install --no-cache-dir -q pip-audit &&
-            pip-audit -r requirements.txt -f json -o security-reports/pip-audit_requirements.json || true
-          '
+          pip-audit -r requirements.txt -f json -o security-reports/pip-audit_requirements.json || true
         '''
       }
     }
@@ -72,8 +73,7 @@ pipeline {
       steps {
         sh '''
           set +e
-          docker run --rm -v "$PWD":"$PWD" -w "$PWD" aquasec/trivy:latest \
-            fs . \
+          trivy fs . \
             --scanners vuln,secret,misconfig \
             --severity HIGH,CRITICAL \
             --format sarif --output security-reports/trivy.sarif \
@@ -100,3 +100,4 @@ pipeline {
     failure { echo 'Build failed due to security findings or scanner errors. See artifacts.' }
   }
 }
+
